@@ -1,0 +1,101 @@
+python-systemd (234-4) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Use secure URI in Homepage field.
+  * Bump debhelper from old 10 to 12.
+  * Set debhelper-compat version in Build-Depends.
+  * Set upstream metadata fields: Bug-Database, Repository, Repository-
+    Browse.
+  * Update standards version to 4.4.1, no changes needed.
+
+  [ Dan Bungert ]
+  * Cherry-pick fix for PY_SSIZE_T_CLEAN (Closes: #1006743)
+
+  [ Michael Biebl ]
+  * Bump Standards-Version to 4.6.0
+  * Bump debhelper-compat to 13
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 02 Apr 2022 10:29:09 +0200
+
+python-systemd (234-3) unstable; urgency=medium
+
+  * d/control: Drop obsolete X-Python3-Version.
+    3.1 is older than oldstable even, so drop the field entirely. Fixes
+    `ancient-python-version-field` lintian warning.
+  * Bump Standards-Version to 4.4.0. No changes necessary.
+  * Drop Python 2 support.
+    All python-systemd reverse dependencies got dropped. (Closes: #938207)
+
+ -- Martin Pitt <mpitt@debian.org>  Thu, 12 Sep 2019 19:18:20 +0000
+
+python-systemd (234-2) unstable; urgency=medium
+
+  [ Michael Biebl ]
+  * Update Vcs-* to point to https://salsa.debian.org
+  * Set Rules-Requires-Root to no
+
+  [ Martin Pitt ]
+  * debian/copyright: Use https URL for Format:
+  * debian/copyright: Move global wildcard section to the top.
+    Fixes lintian warning
+    global-files-wildcard-not-first-paragraph-in-dep5-copyright.
+  * Bump Standards-Version to 4.1.3
+
+ -- Martin Pitt <mpitt@debian.org>  Mon, 26 Mar 2018 00:00:00 +0200
+
+python-systemd (234-1) unstable; urgency=medium
+
+  * New upstream version 234
+  * Bump debhelper compat level to 10
+  * Update Vcs-* following the latest recommendation
+  * Bump Standards-Version to 4.0.0
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 18 Jul 2017 23:25:48 +0200
+
+python-systemd (233-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 17 Oct 2016 19:17:47 +0200
+
+python-systemd (232-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Stop removing systemd/id128-constants.h on clean. This file is now shipped
+    in the dist tarball/repository.
+  * Bump Standards-Version to 3.9.8.
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 22 Sep 2016 14:29:34 +0200
+
+python-systemd (231-2) unstable; urgency=medium
+
+  [ Benjamin Drung ]
+  * debian/control: Run wrap-and-sort -a.
+  * Add python-systemd (Python 2 version) package. (Closes: #807496)
+
+  [ Martin Pitt ]
+  * Add autopkgtest for Python 2 package.
+
+ -- Martin Pitt <mpitt@debian.org>  Mon, 14 Dec 2015 08:07:44 +0100
+
+python-systemd (231-1) unstable; urgency=medium
+
+  [ Martin Pitt ]
+  * Add autopkgtest (copied from systemd source).
+
+  [ Michael Biebl ]
+  * Add debian/gbp.conf for git-buildpackage.
+  * New upstream release.
+  * Simplify clean up of systemd/id128-constants.h. The file is also created
+    automatically now, so we don't have to override dh_auto_build anymore for
+    this.
+  * Add Build-Depends on pkg-config as per setup.py.
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 29 Oct 2015 01:54:51 +0100
+
+python-systemd (230-1) unstable; urgency=medium
+
+  * Initial release after the split from src:systemd. See
+    http://lists.freedesktop.org/archives/systemd-devel/2015-July/033443.html
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 07 Jul 2015 18:19:12 +0200

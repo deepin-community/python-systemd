@@ -1,0 +1,10 @@
+#! /usr/bin/make -f
+
+#export DH_VERBOSE=1
+#export DEB_BUILD_OPTIONS="nostrip"
+export PYBUILD_NAME=systemd
+
+# Explicitly tell dh to use pybuild, otherwise it will pick the
+# makefile build system.
+%:
+	dh $@ --with python3 --buildsystem=pybuild
