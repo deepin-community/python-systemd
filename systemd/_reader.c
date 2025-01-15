@@ -18,7 +18,12 @@
   along with python-systemd; If not, see <http://www.gnu.org/licenses/>.
 ***/
 
+#define PY_SSIZE_T_CLEAN
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wredundant-decls"
 #include <Python.h>
+#pragma GCC diagnostic pop
+
 #include <structmember.h>
 #include <datetime.h>
 #include <time.h>
@@ -32,22 +37,28 @@
 #include "strv.h"
 
 #if defined(LIBSYSTEMD_VERSION) || LIBSYSTEMD_JOURNAL_VERSION > 204
-#  define HAVE_JOURNAL_OPEN_FILES
+#  define HAVE_JOURNAL_OPEN_FILES 1
 #else
 #  define SD_JOURNAL_SYSTEM        (1 << 2)
 #  define SD_JOURNAL_CURRENT_USER  (1 << 3)
+#  define HAVE_JOURNAL_OPEN_FILES 0
 #endif
 
-#if LIBSYSTEMD_VERSION >= 229
-#  define HAVE_ENUMERATE_FIELDS
-#  define HAVE_HAS_RUNTIME_FILES
-#  define HAVE_HAS_PERSISTENT_FILES
+#define HAVE_ENUMERATE_FIELDS      (LIBSYSTEMD_VERSION >= 229)
+#define HAVE_HAS_RUNTIME_FILES     (LIBSYSTEMD_VERSION >= 229)
+#define HAVE_HAS_PERSISTENT_FILES  (LIBSYSTEMD_VERSION >= 229)
+
+#if LIBSYSTEMD_VERSION >= 245
+#  define HAVE_JOURNAL_OPEN_NAMESPACE 1
+#else
+#  define HAVE_JOURNAL_OPEN_NAMESPACE 0
 #endif
 
 #if LIBSYSTEMD_VERSION >= 230
-#  define HAVE_JOURNAL_OPEN_DIRECTORY_FD
+#  define HAVE_JOURNAL_OPEN_DIRECTORY_FD 1
 #else
 #  define SD_JOURNAL_OS_ROOT       (1 << 4)
+#  define HAVE_JOURNAL_OPEN_DIRECTORY_FD 0
 #endif
 
 typedef struct {
@@ -84,17 +95,17 @@ static PyStructSequence_Desc Monotonic_desc = {
  * Convert a str or bytes object into a C-string path.
  * Returns NULL on error.
  */
-static char* convert_path(PyObject *path, PyObject **bytes) {
+static char* str_converter(PyObject *str, PyObject **bytes) {
 #if PY_MAJOR_VERSION >=3 && PY_MINOR_VERSION >= 1
                 int r;
 
-                r = PyUnicode_FSConverter(path, bytes);
+                r = PyUnicode_FSConverter(str, bytes);
                 if (r == 0)
                         return NULL;
 
                 return PyBytes_AsString(*bytes);
 #else
-                return PyString_AsString(path);
+                return PyString_AsString(str);
 #endif
 }
 
@@ -141,7 +152,7 @@ static int strv_converter(PyObject* obj, void *_result) {
                 char *s;
 
                 item = PySequence_ITEM(obj, i);
-                s = convert_path(item, &bytes);
+                s = str_converter(item, &bytes);
                 if (!s)
                         goto cleanup;
 
@@ -220,7 +231,7 @@ static void Reader_dealloc(Reader* self) {
 }
 
 PyDoc_STRVAR(Reader__doc__,
-             "_Reader([flags | path | files]) -> ...\n\n"
+             "_Reader([flags | path | files | namespace]) -> ...\n\n"
              "_Reader allows filtering and retrieval of Journal entries.\n"
              "Note: this is a low-level interface, and probably not what you\n"
              "want, use systemd.journal.Reader instead.\n\n"
@@ -231,23 +242,25 @@ PyDoc_STRVAR(Reader__doc__,
              "OS_ROOT is used to open the journal from directories relative to the specified\n"
              "directory path or file descriptor.\n"
              "\n"
-             "Instead of opening the system journal, argument `path` may specify a directory\n"
-             "which contains the journal. It maybe be either a file system path (a string), or\n"
-             "a file descriptor (an integer). Alternatively, argument `files` may specify a list\n"
-             "of journal file names. Note that `flags`, `path`, `files`, `directory_fd` are\n"
-             "exclusive.\n\n"
+             "If `namespace` argument is specified, the specific journal namespace will be open\n"
+             "(supported since systemd v245). Instead of opening the system journal, argument\n"
+             "`path` may specify a directory which contains the journal. It maybe be either\n"
+             "a file system path (a string), or a file descriptor (an integer). Alternatively,\n"
+             "argument `files` may specify a list of journal file names. Note that `flags`, `path`,\n"
+             "`files`, `directory_fd`, `namespace` are exclusive.\n\n"
              "_Reader implements the context manager protocol: the journal will be closed when\n"
              "exiting the block.");
 static int Reader_init(Reader *self, PyObject *args, PyObject *keywds) {
         unsigned flags = SD_JOURNAL_LOCAL_ONLY;
-        PyObject *_path = NULL, *_files = NULL;
+        PyObject *_path = NULL, *_files = NULL, *_namespace = NULL;
         int r;
 
-        static const char* const kwlist[] = {"flags", "path", "files", NULL};
-        if (!PyArg_ParseTupleAndKeywords(args, keywds, "|iO&O&:__init__", (char**) kwlist,
+        static const char* const kwlist[] = {"flags", "path", "files", "namespace", NULL};
+        if (!PyArg_ParseTupleAndKeywords(args, keywds, "|iO&O&O&:__init__", (char**) kwlist,
                                          &flags,
                                          null_converter, &_path,
-                                         null_converter, &_files))
+                                         null_converter, &_files,
+                                         null_converter, &_namespace))
                 return -1;
 
         if (!!_path + !!_files > 1) {
@@ -263,7 +276,7 @@ static int Reader_init(Reader *self, PyObject *args, PyObject *keywds) {
                         if (long_as_fd(_path, &fd) < 0)
                                 return -1;
 
-#ifdef HAVE_JOURNAL_OPEN_DIRECTORY_FD
+#if HAVE_JOURNAL_OPEN_DIRECTORY_FD
                         Py_BEGIN_ALLOW_THREADS
                         r = sd_journal_open_directory_fd(&self->j, (int) fd, flags);
                         Py_END_ALLOW_THREADS
@@ -274,7 +287,7 @@ static int Reader_init(Reader *self, PyObject *args, PyObject *keywds) {
                         char *path = NULL;
                         _cleanup_Py_DECREF_ PyObject *path_bytes = NULL;
 
-                        path = convert_path(_path, &path_bytes);
+                        path = str_converter(_path, &path_bytes);
                         if (!path)
                                 return -1;
 
@@ -286,13 +299,13 @@ static int Reader_init(Reader *self, PyObject *args, PyObject *keywds) {
                 _cleanup_Py_DECREF_ PyObject *item0 = NULL;
 
                 item0 = PySequence_GetItem(_files, 0);
-                if (item0 == NULL || !PyLong_Check(item0)) {
+                if (!item0 || !PyLong_Check(item0)) {
                         _cleanup_strv_free_ char **files = NULL;
 
                         if (!strv_converter(_files, &files))
                                 return -1;
 
-#ifdef HAVE_JOURNAL_OPEN_FILES
+#if HAVE_JOURNAL_OPEN_FILES
                         Py_BEGIN_ALLOW_THREADS
                         r = sd_journal_open_files(&self->j, (const char**) files, flags);
                         Py_END_ALLOW_THREADS
@@ -306,7 +319,7 @@ static int Reader_init(Reader *self, PyObject *args, PyObject *keywds) {
                         if (!intlist_converter(_files, &fds, &n_fds))
                                 return -1;
 
-#ifdef HAVE_JOURNAL_OPEN_DIRECTORY_FD
+#if HAVE_JOURNAL_OPEN_DIRECTORY_FD
                         Py_BEGIN_ALLOW_THREADS
                         r = sd_journal_open_files_fd(&self->j, fds, n_fds, flags);
                         Py_END_ALLOW_THREADS
@@ -314,6 +327,20 @@ static int Reader_init(Reader *self, PyObject *args, PyObject *keywds) {
                         r = -ENOSYS;
 #endif
                 }
+        } else if (_namespace) {
+#if HAVE_JOURNAL_OPEN_NAMESPACE
+                char *namespace = NULL;
+                _cleanup_Py_DECREF_ PyObject *ns_bytes = NULL;
+                namespace = str_converter(_namespace, &ns_bytes);
+                if (!namespace)
+                        return -1;
+
+                Py_BEGIN_ALLOW_THREADS
+                r = sd_journal_open_namespace(&self->j, namespace, flags);
+                Py_END_ALLOW_THREADS
+#else
+                r = -ENOSYS;
+#endif
         } else {
                 Py_BEGIN_ALLOW_THREADS
                 r = sd_journal_open(&self->j, flags);
@@ -327,7 +354,10 @@ PyDoc_STRVAR(Reader_fileno__doc__,
              "fileno() -> int\n\n"
              "Get a file descriptor to poll for changes in the journal.\n"
              "This method invokes sd_journal_get_fd().\n"
-             "See man:sd_journal_get_fd(3).");
+             "See :manpage:`sd_journal_get_fd(3)`.\n\n"
+             "When the file descriptor returned by this function is used a poll\n"
+             "loop, .process() should be used to process events and reset the readability\n"
+             "state of the file descriptor.");
 static PyObject* Reader_fileno(Reader *self, PyObject *args) {
         int fd;
 
@@ -342,7 +372,7 @@ PyDoc_STRVAR(Reader_reliable_fd__doc__,
              "reliable_fd() -> bool\n\n"
              "Returns True iff the journal can be polled reliably.\n"
              "This method invokes sd_journal_reliable_fd().\n"
-             "See man:sd_journal_reliable_fd(3).");
+             "See :manpage:`sd_journal_reliable_fd(3)`.");
 static PyObject* Reader_reliable_fd(Reader *self, PyObject *args) {
         int r;
 
@@ -356,7 +386,7 @@ PyDoc_STRVAR(Reader_get_events__doc__,
              "get_events() -> int\n\n"
              "Returns a mask of poll() events to wait for on the file\n"
              "descriptor returned by .fileno().\n\n"
-             "See man:sd_journal_get_events(3) for further discussion.");
+             "See :manpage:`sd_journal_get_events(3)` for further discussion.");
 static PyObject* Reader_get_events(Reader *self, PyObject *args) {
         int r;
 
@@ -373,7 +403,7 @@ PyDoc_STRVAR(Reader_get_timeout__doc__,
              "is necessary.\n\n"
              "The return value must be converted to a relative timeout in\n"
              "milliseconds if it is to be used as an argument for poll().\n"
-             "See man:sd_journal_get_timeout(3) for further discussion.");
+             "See :manpage:`sd_journal_get_timeout(3)` for further discussion.");
 static PyObject* Reader_get_timeout(Reader *self, PyObject *args) {
         int r;
         uint64_t t;
@@ -409,7 +439,7 @@ PyDoc_STRVAR(Reader_close__doc__,
              "close() -> None\n\n"
              "Free resources allocated by this Reader object.\n"
              "This method invokes sd_journal_close().\n"
-             "See man:sd_journal_close(3).");
+             "See :manpage:`sd_journal_close(3)`.");
 static PyObject* Reader_close(Reader *self, PyObject *args) {
         assert(self);
         assert(!args);
@@ -427,7 +457,7 @@ PyDoc_STRVAR(Reader_get_usage__doc__,
              "the size of journal files of the local host, otherwise\n"
              "of all hosts.\n\n"
              "This method invokes sd_journal_get_usage().\n"
-             "See man:sd_journal_get_usage(3).");
+             "See :manpage:`sd_journal_get_usage(3)`.");
 static PyObject* Reader_get_usage(Reader *self, PyObject *args) {
         int r;
         uint64_t bytes;
@@ -638,7 +668,7 @@ PyDoc_STRVAR(Reader_get_realtime__doc__,
              "Return the realtime timestamp for the current journal entry\n"
              "in microseconds.\n\n"
              "Wraps sd_journal_get_realtime_usec().\n"
-             "See man:sd_journal_get_realtime_usec(3).");
+             "See :manpage:`sd_journal_get_realtime_usec(3)`.");
 static PyObject* Reader_get_realtime(Reader *self, PyObject *args) {
         uint64_t timestamp;
         int r;
@@ -659,7 +689,7 @@ PyDoc_STRVAR(Reader_get_monotonic__doc__,
              "Return the monotonic timestamp for the current journal entry\n"
              "as a tuple of time in microseconds and bootid.\n\n"
              "Wraps sd_journal_get_monotonic_usec().\n"
-             "See man:sd_journal_get_monotonic_usec(3).");
+             "See :manpage:`sd_journal_get_monotonic_usec(3)`.");
 static PyObject* Reader_get_monotonic(Reader *self, PyObject *args) {
         uint64_t timestamp;
         sd_id128_t id;
@@ -707,11 +737,17 @@ PyDoc_STRVAR(Reader_add_match__doc__,
              "Match is a string of the form \"FIELD=value\".");
 static PyObject* Reader_add_match(Reader *self, PyObject *args, PyObject *keywds) {
         char *match;
-        int match_len, r;
+        Py_ssize_t match_len;
+        int r;
         if (!PyArg_ParseTuple(args, "s#:add_match", &match, &match_len))
                 return NULL;
 
-        r = sd_journal_add_match(self->j, match, match_len);
+        if (match_len > INT_MAX) {
+                set_error(-ENOBUFS, NULL, NULL);
+                return NULL;
+        }
+
+        r = sd_journal_add_match(self->j, match, (int) match_len);
         if (set_error(r, NULL, "Invalid match") < 0)
                 return NULL;
 
@@ -723,7 +759,7 @@ PyDoc_STRVAR(Reader_add_disjunction__doc__,
              "Inserts a logical OR between matches added since previous\n"
              "add_disjunction() or add_conjunction() and the next\n"
              "add_disjunction() or add_conjunction().\n\n"
-             "See man:sd_journal_add_disjunction(3) for explanation.");
+             "See :manpage:`sd_journal_add_disjunction(3)` for explanation.");
 static PyObject* Reader_add_disjunction(Reader *self, PyObject *args) {
         int r;
         r = sd_journal_add_disjunction(self->j);
@@ -737,7 +773,7 @@ PyDoc_STRVAR(Reader_add_conjunction__doc__,
              "Inserts a logical AND between matches added since previous\n"
              "add_disjunction() or add_conjunction() and the next\n"
              "add_disjunction() or add_conjunction().\n\n"
-             "See man:sd_journal_add_disjunction(3) for explanation.");
+             "See :manpage:`sd_journal_add_disjunction(3)` for explanation.");
 static PyObject* Reader_add_conjunction(Reader *self, PyObject *args) {
         int r;
         r = sd_journal_add_conjunction(self->j);
@@ -758,7 +794,7 @@ PyDoc_STRVAR(Reader_seek_head__doc__,
              "seek_head() -> None\n\n"
              "Jump to the beginning of the journal.\n"
              "This method invokes sd_journal_seek_head().\n"
-             "See man:sd_journal_seek_head(3).");
+             "See :manpage:`sd_journal_seek_head(3)`.");
 static PyObject* Reader_seek_head(Reader *self, PyObject *args) {
         int r;
         Py_BEGIN_ALLOW_THREADS
@@ -775,7 +811,7 @@ PyDoc_STRVAR(Reader_seek_tail__doc__,
              "seek_tail() -> None\n\n"
              "Jump to the end of the journal.\n"
              "This method invokes sd_journal_seek_tail().\n"
-             "See man:sd_journal_seek_tail(3).");
+             "See :manpage:`sd_journal_seek_tail(3)`.");
 static PyObject* Reader_seek_tail(Reader *self, PyObject *args) {
         int r;
 
@@ -847,15 +883,57 @@ static PyObject* Reader_seek_monotonic(Reader *self, PyObject *args) {
         Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(Reader_get_start__doc__,
+        "get_start() -> int\n\n"
+        "Return the realtime timestamp of the first journal entry\n\n"
+        "in microseconds.\n\n"
+        "Wraps sd_journal_get_cutoff_realtime_usec().\n"
+        "See :manpage:`sd_journal_get_cutoff_realtime_usec(3)`.");
+static PyObject* Reader_get_start(Reader *self, PyObject *args) {
+        uint64_t start;
+        int r;
+
+        assert(self);
+        assert(!args);
+
+        r = sd_journal_get_cutoff_realtime_usec(self->j, &start, NULL);
+        if (set_error(r, NULL, NULL) < 0)
+                return NULL;
+
+        assert_cc(sizeof(unsigned long long) == sizeof(start));
+        return PyLong_FromUnsignedLongLong(start);
+}
+
+PyDoc_STRVAR(Reader_get_end__doc__,
+        "get_end() -> int\n\n"
+        "Return the realtime timestamp of the last journal entry\n\n"
+        "in microseconds.\n\n"
+        "Wraps sd_journal_get_cutoff_realtime_usec().\n"
+        "See :manpage:`sd_journal_get_cutoff_realtime_usec(3)`.");
+static PyObject* Reader_get_end(Reader *self, PyObject *args) {
+        uint64_t end;
+        int r;
+
+        assert(self);
+        assert(!args);
+
+        r = sd_journal_get_cutoff_realtime_usec(self->j, NULL, &end);
+        if (set_error(r, NULL, NULL) < 0)
+                return NULL;
+
+        assert_cc(sizeof(unsigned long long) == sizeof(end));
+        return PyLong_FromUnsignedLongLong(end);
+}
+
 
 PyDoc_STRVAR(Reader_process__doc__,
              "process() -> state change (integer)\n\n"
-             "Process events and reset the readable state of the file\n"
+             "Process events and reset the readability state of the file\n"
              "descriptor returned by .fileno().\n\n"
              "Will return constants: NOP if no change; APPEND if new\n"
              "entries have been added to the end of the journal; and\n"
              "INVALIDATE if journal files have been added or removed.\n\n"
-             "See man:sd_journal_process(3) for further discussion.");
+             "See :manpage:`sd_journal_process(3)` for further discussion.");
 static PyObject* Reader_process(Reader *self, PyObject *args) {
         int r;
 
@@ -879,10 +957,10 @@ PyDoc_STRVAR(Reader_wait__doc__,
              "Will return constants: NOP if no change; APPEND if new\n"
              "entries have been added to the end of the journal; and\n"
              "INVALIDATE if journal files have been added or removed.\n\n"
-             "See man:sd_journal_wait(3) for further discussion.");
+             "See :manpage:`sd_journal_wait(3)` for further discussion.");
 static PyObject* Reader_wait(Reader *self, PyObject *args) {
         int r;
-        int64_t timeout;
+        int64_t timeout = -1;
 
         if (!PyArg_ParseTuple(args, "|L:wait", &timeout))
                 return NULL;
@@ -920,7 +998,7 @@ static PyObject* Reader_seek_cursor(Reader *self, PyObject *args) {
 PyDoc_STRVAR(Reader_get_cursor__doc__,
              "get_cursor() -> str\n\n"
              "Return a cursor string for the current journal entry.\n\n"
-             "Wraps sd_journal_get_cursor(). See man:sd_journal_get_cursor(3).");
+             "Wraps sd_journal_get_cursor(). See :manpage:`sd_journal_get_cursor(3)`.");
 static PyObject* Reader_get_cursor(Reader *self, PyObject *args) {
         _cleanup_free_ char *cursor = NULL;
         int r;
@@ -938,7 +1016,7 @@ static PyObject* Reader_get_cursor(Reader *self, PyObject *args) {
 PyDoc_STRVAR(Reader_test_cursor__doc__,
              "test_cursor(str) -> bool\n\n"
              "Test whether the cursor string matches current journal entry.\n\n"
-             "Wraps sd_journal_test_cursor(). See man:sd_journal_test_cursor(3).");
+             "Wraps sd_journal_test_cursor(). See :manpage:`sd_journal_test_cursor(3)`.");
 static PyObject* Reader_test_cursor(Reader *self, PyObject *args) {
         const char *cursor;
         int r;
@@ -1016,7 +1094,7 @@ PyDoc_STRVAR(Reader_enumerate_fields__doc__,
              "Return a set of field names appearing in the journal.\n"
              "See sd_journal_enumerate_fields(3).");
 static PyObject* Reader_enumerate_fields(Reader *self, PyObject *args) {
-#ifdef HAVE_ENUMERATE_FIELDS
+#if HAVE_ENUMERATE_FIELDS
         _cleanup_Py_DECREF_ PyObject *_value_set = NULL;
         PyObject *value_set;
         int r;
@@ -1056,9 +1134,9 @@ static PyObject* Reader_enumerate_fields(Reader *self, PyObject *args) {
 PyDoc_STRVAR(Reader_has_runtime_files__doc__,
              "has_runtime_files(str) -> bool\n\n"
              "Returns true if runtime journal files have been found.\n\n"
-             "See man:sd_journal_test_cursor(3).");
+             "See :manpage:`sd_journal_test_cursor(3)`.");
 static PyObject* Reader_has_runtime_files(Reader *self, PyObject *args) {
-#ifdef HAVE_ENUMERATE_FIELDS
+#if HAVE_ENUMERATE_FIELDS
         int r;
 
         assert(self);
@@ -1077,9 +1155,9 @@ static PyObject* Reader_has_runtime_files(Reader *self, PyObject *args) {
 PyDoc_STRVAR(Reader_has_persistent_files__doc__,
              "has_persistent_files(str) -> bool\n\n"
              "Returns true if persistent journal files have been found.\n\n"
-             "See man:sd_journal_test_cursor(3).");
+             "See :manpage:`sd_journal_test_cursor(3)`.");
 static PyObject* Reader_has_persistent_files(Reader *self, PyObject *args) {
-#ifdef HAVE_ENUMERATE_FIELDS
+#if HAVE_ENUMERATE_FIELDS
         int r;
 
         assert(self);
@@ -1101,7 +1179,7 @@ PyDoc_STRVAR(Reader_get_catalog__doc__,
              "Will throw IndexError if the entry has no MESSAGE_ID\n"
              "and KeyError is the id is specified, but hasn't been found\n"
              "in the catalog.\n\n"
-             "Wraps man:sd_journal_get_catalog(3).");
+             "Wraps :manpage:`sd_journal_get_catalog(3)`.");
 static PyObject* Reader_get_catalog(Reader *self, PyObject *args) {
         int r;
         _cleanup_free_ char *msg = NULL;
@@ -1139,7 +1217,7 @@ static PyObject* Reader_get_catalog(Reader *self, PyObject *args) {
 PyDoc_STRVAR(get_catalog__doc__,
              "get_catalog(id128) -> str\n\n"
              "Retrieve a message catalog entry for the given id.\n"
-             "Wraps man:sd_journal_get_catalog_for_message_id(3).");
+             "Wraps :manpage:`sd_journal_get_catalog_for_message_id(3)`.");
 static PyObject* get_catalog(PyObject *self, PyObject *args) {
         int r;
         char *id_ = NULL;
@@ -1184,7 +1262,7 @@ static PyObject* Reader_get_data_threshold(Reader *self, void *closure) {
 static int Reader_set_data_threshold(Reader *self, PyObject *value, void *closure) {
         int r;
 
-        if (value == NULL) {
+        if (!value) {
                 PyErr_SetString(PyExc_AttributeError, "Cannot delete data threshold");
                 return -1;
         }
@@ -1201,7 +1279,7 @@ static int Reader_set_data_threshold(Reader *self, PyObject *value, void *closur
 PyDoc_STRVAR(closed__doc__,
              "True iff journal is closed");
 static PyObject* Reader_get_closed(Reader *self, void *closure) {
-        return PyBool_FromLong(self->j == NULL);
+        return PyBool_FromLong(!self->j);
 }
 
 static PyGetSetDef Reader_getsetters[] = {
@@ -1242,6 +1320,8 @@ static PyMethodDef Reader_methods[] = {
         {"seek_tail",            (PyCFunction) Reader_seek_tail, METH_NOARGS, Reader_seek_tail__doc__},
         {"seek_realtime",        (PyCFunction) Reader_seek_realtime, METH_VARARGS, Reader_seek_realtime__doc__},
         {"seek_monotonic",       (PyCFunction) Reader_seek_monotonic, METH_VARARGS, Reader_seek_monotonic__doc__},
+        {"_get_start",           (PyCFunction) Reader_get_start, METH_NOARGS, Reader_get_start__doc__},
+        {"_get_end",             (PyCFunction) Reader_get_end, METH_NOARGS, Reader_get_end__doc__},
         {"process",              (PyCFunction) Reader_process, METH_NOARGS, Reader_process__doc__},
         {"wait",                 (PyCFunction) Reader_wait, METH_VARARGS, Reader_wait__doc__},
         {"seek_cursor",          (PyCFunction) Reader_seek_cursor, METH_VARARGS, Reader_seek_cursor__doc__},
@@ -1276,10 +1356,10 @@ static PyMethodDef methods[] = {
 #if PY_MAJOR_VERSION >= 3
 static PyModuleDef module = {
         PyModuleDef_HEAD_INIT,
-        "_reader",
-        module__doc__,
-        -1,
-        methods,
+        .m_name = "_reader",
+        .m_doc = module__doc__,
+        .m_size = -1,
+        .m_methods = methods,
 };
 #endif
 
@@ -1309,7 +1389,7 @@ init_reader(void)
 
 #if PY_MAJOR_VERSION >= 3
         m = PyModule_Create(&module);
-        if (m == NULL)
+        if (!m)
                 return NULL;
 
         if (!initialized) {
@@ -1318,7 +1398,7 @@ init_reader(void)
         }
 #else
         m = Py_InitModule3("_reader", methods, module__doc__);
-        if (m == NULL)
+        if (!m)
                 return;
 #endif
 
@@ -1336,7 +1416,7 @@ init_reader(void)
             PyModule_AddIntConstant(m, "LOCAL_ONLY", SD_JOURNAL_LOCAL_ONLY) ||
             PyModule_AddIntConstant(m, "RUNTIME_ONLY", SD_JOURNAL_RUNTIME_ONLY) ||
             PyModule_AddIntConstant(m, "SYSTEM", SD_JOURNAL_SYSTEM) ||
-            PyModule_AddIntConstant(m, "SYSTEM_ONLY", SD_JOURNAL_SYSTEM_ONLY) ||
+            PyModule_AddIntConstant(m, "SYSTEM_ONLY", SD_JOURNAL_SYSTEM) ||
             PyModule_AddIntConstant(m, "CURRENT_USER", SD_JOURNAL_CURRENT_USER) ||
             PyModule_AddIntConstant(m, "OS_ROOT", SD_JOURNAL_OS_ROOT) ||
             PyModule_AddStringConstant(m, "__version__", PACKAGE_VERSION)) {

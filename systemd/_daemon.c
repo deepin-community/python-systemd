@@ -33,22 +33,16 @@
 #include "macro.h"
 #include "util.h"
 
-#if LIBSYSTEMD_VERSION >= 214
-#  define HAVE_PID_NOTIFY
-#endif
+#define HAVE_PID_NOTIFY               (LIBSYSTEMD_VERSION >= 214)
+#define HAVE_PID_NOTIFY_WITH_FDS      (LIBSYSTEMD_VERSION >= 219)
+#define HAVE_SD_LISTEN_FDS_WITH_NAMES (LIBSYSTEMD_VERSION >= 227)
+#define HAVE_IS_SOCKET_SOCKADDR       (LIBSYSTEMD_VERSION >= 233)
 
-#if LIBSYSTEMD_VERSION >= 219
-#  define HAVE_PID_NOTIFY_WITH_FDS
-#endif
-
-#if LIBSYSTEMD_VERSION >= 233
-#  define HAVE_IS_SOCKET_SOCKADDR
-#endif
 
 PyDoc_STRVAR(module__doc__,
         "Python interface to the libsystemd-daemon library.\n\n"
-        "Provides _listen_fds, notify, booted, and is_* functions\n"
-        "which wrap sd_listen_fds, sd_notify, sd_booted, sd_is_* and\n"
+        "Provides _listen_fds*, notify, booted, and is_* functions\n"
+        "which wrap sd_listen_fds*, sd_notify, sd_booted, sd_is_*;\n"
         "useful for socket activation and checking if the system is\n"
         "running under systemd."
 );
@@ -61,7 +55,7 @@ PyDoc_STRVAR(booted__doc__,
 
 static PyObject* booted(PyObject *self, PyObject *args) {
         int r;
-        assert(args == NULL);
+        assert(!args);
 
         r = sd_booted();
         if (set_error(r, NULL, NULL) < 0)
@@ -104,7 +98,7 @@ static PyObject* notify(PyObject *self, PyObject *args, PyObject *keywds) {
         if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|OiO:notify",
                                          (char**) kwlist, &msg, &obj, &_pid, &fds))
                 return NULL;
-        if (obj != NULL)
+        if (obj)
                 unset = PyObject_IsTrue(obj);
         if (unset < 0)
                 return NULL;
@@ -115,7 +109,7 @@ static PyObject* notify(PyObject *self, PyObject *args, PyObject *keywds) {
                 return NULL;
         }
 
-        if (fds != NULL) {
+        if (fds) {
                 Py_ssize_t i, len;
 
                 len = PySequence_Length(fds);
@@ -123,11 +117,11 @@ static PyObject* notify(PyObject *self, PyObject *args, PyObject *keywds) {
                         return NULL;
 
                 arr = PyMem_NEW(int, len);
-                if (!fds)
+                if (!arr)
                         return NULL;
 
                 for (i = 0; i < len; i++) {
-                        PyObject *item = PySequence_GetItem(fds, i);
+                        _cleanup_Py_DECREF_ PyObject *item = PySequence_GetItem(fds, i);
                         if (!item)
                                 return NULL;
 
@@ -145,17 +139,17 @@ static PyObject* notify(PyObject *self, PyObject *args, PyObject *keywds) {
                 n_fds = len;
         }
 
-        if (pid == 0 && fds == NULL)
+        if (pid == 0 && !fds)
                 r = sd_notify(unset, msg);
-        else if (fds == NULL) {
-#ifdef HAVE_PID_NOTIFY
+        else if (!fds) {
+#if HAVE_PID_NOTIFY
                 r = sd_pid_notify(pid, unset, msg);
 #else
                 set_error(-ENOSYS, NULL, "Compiled without support for sd_pid_notify");
                 return NULL;
 #endif
         } else {
-#ifdef HAVE_PID_NOTIFY_WITH_FDS
+#if HAVE_PID_NOTIFY_WITH_FDS
                 r = sd_pid_notify_with_fds(pid, unset, msg, arr, n_fds);
 #else
                 set_error(-ENOSYS, NULL, "Compiled without support for sd_pid_notify_with_fds");
@@ -191,7 +185,7 @@ static PyObject* listen_fds(PyObject *self, PyObject *args, PyObject *keywds) {
         if (!PyArg_ParseTupleAndKeywords(args, keywds, "|O:_listen_fds",
                                          (char**) kwlist, &obj))
                 return NULL;
-        if (obj != NULL)
+        if (obj)
                 unset = PyObject_IsTrue(obj);
         if (unset < 0)
                 return NULL;
@@ -202,6 +196,80 @@ static PyObject* listen_fds(PyObject *self, PyObject *args, PyObject *keywds) {
                 return NULL;
 
         return long_FromLong(r);
+}
+
+PyDoc_STRVAR(listen_fds_with_names__doc__,
+             "_listen_fds_with_names(unset_environment=True) -> (int, str...)\n\n"
+             "Wraps sd_listen_fds_with_names(3).\n"
+#if HAVE_SD_LISTEN_FDS_WITH_NAMES
+             "Return the number of descriptors passed to this process by the init system\n"
+             "and their names as part of the socket-based activation logic.\n"
+#else
+             "NOT SUPPORTED: compiled without support sd_listen_fds_with_names"
+#endif
+);
+
+static void free_names(char **names) {
+        if (names == NULL)
+                return;
+        for (char **n = names; *n != NULL; n++)
+                free(*n);
+        free(names);
+}
+static PyObject* listen_fds_with_names(PyObject *self, PyObject *args, PyObject *keywds) {
+        int r;
+        int unset = false;
+        char **names = NULL;
+        PyObject *tpl, *item;
+
+        static const char* const kwlist[] = {"unset_environment", NULL};
+#if PY_MAJOR_VERSION >=3 && PY_MINOR_VERSION >= 3
+        if (!PyArg_ParseTupleAndKeywords(args, keywds, "|p:_listen_fds_with_names",
+                                         (char**) kwlist, &unset))
+                return NULL;
+#else
+        PyObject *obj = NULL;
+        if (!PyArg_ParseTupleAndKeywords(args, keywds, "|O:_listen_fds_with_names",
+                                         (char**) kwlist, &obj))
+                return NULL;
+        if (obj != NULL)
+                unset = PyObject_IsTrue(obj);
+        if (unset < 0)
+                return NULL;
+#endif
+
+#if HAVE_SD_LISTEN_FDS_WITH_NAMES
+        r = sd_listen_fds_with_names(unset, &names);
+        if (set_error(r, NULL, NULL) < 0)
+                return NULL;
+
+        tpl = PyTuple_New(r+1);
+        if (tpl == NULL)
+                return NULL;
+
+        item = long_FromLong(r);
+        if (item == NULL) {
+                Py_DECREF(tpl);
+                return NULL;
+        }
+        if (PyTuple_SetItem(tpl, 0, item) < 0) {
+                Py_DECREF(tpl);
+                return NULL;
+        }
+	for (int i = 0; i < r && names[i] != NULL; i++) {
+                item = unicode_FromString(names[i]);
+                if (PyTuple_SetItem(tpl, 1+i, item) < 0) {
+                        Py_DECREF(tpl);
+			free_names(names);
+                        return NULL;
+                }
+        }
+	free_names(names);
+        return tpl;
+#else /* !HAVE_SD_LISTEN_FDS_WITH_NAMES */
+        set_error(-ENOSYS, NULL, "Compiled without support for sd_listen_fds_with_names");
+        return NULL;
+#endif /* HAVE_SD_LISTEN_FDS_WITH_NAMES */
 }
 
 PyDoc_STRVAR(is_fifo__doc__,
@@ -320,7 +388,7 @@ static PyObject* is_socket_inet(PyObject *self, PyObject *args) {
 PyDoc_STRVAR(is_socket_sockaddr__doc__,
              "_is_socket_sockaddr(fd, address, type=0, flowinfo=0, listening=-1) -> bool\n\n"
              "Wraps sd_is_socket_inet_sockaddr(3).\n"
-#ifdef HAVE_IS_SOCKET_SOCKADDR
+#if HAVE_IS_SOCKET_SOCKADDR
              "`address` is a systemd-style numerical IPv4 or IPv6 address as used in\n"
              "ListenStream=. A port may be included after a colon (\":\"). See\n"
              "systemd.socket(5) for details.\n\n"
@@ -360,7 +428,7 @@ static PyObject* is_socket_sockaddr(PyObject *self, PyObject *args) {
                 addr.in6.sin6_flowinfo = flowinfo;
         }
 
-#ifdef HAVE_IS_SOCKET_SOCKADDR
+#if HAVE_IS_SOCKET_SOCKADDR
         r = sd_is_socket_sockaddr(fd, type, &addr.sa, addr_len, listening);
         if (set_error(r, NULL, NULL) < 0)
                 return NULL;
@@ -411,6 +479,8 @@ static PyMethodDef methods[] = {
         { "booted", booted, METH_NOARGS, booted__doc__},
         { "notify", (PyCFunction) notify, METH_VARARGS | METH_KEYWORDS, notify__doc__},
         { "_listen_fds", (PyCFunction) listen_fds, METH_VARARGS | METH_KEYWORDS, listen_fds__doc__},
+        { "_listen_fds_with_names", (PyCFunction) listen_fds_with_names,
+                METH_VARARGS | METH_KEYWORDS, listen_fds_with_names__doc__},
         { "_is_fifo", is_fifo, METH_VARARGS, is_fifo__doc__},
         { "_is_mq", is_mq, METH_VARARGS, is_mq__doc__},
         { "_is_socket", is_socket, METH_VARARGS, is_socket__doc__},
@@ -427,7 +497,7 @@ PyMODINIT_FUNC init_daemon(void) {
         PyObject *m;
 
         m = Py_InitModule3("_daemon", methods, module__doc__);
-        if (m == NULL)
+        if (!m)
                 return;
 
         PyModule_AddIntConstant(m, "LISTEN_FDS_START", SD_LISTEN_FDS_START);
@@ -439,10 +509,10 @@ REENABLE_WARNING;
 
 static struct PyModuleDef module = {
         PyModuleDef_HEAD_INIT,
-        "_daemon", /* name of module */
-        module__doc__, /* module documentation, may be NULL */
-        0, /* size of per-interpreter state of the module */
-        methods
+        .m_name = "_daemon", /* name of module */
+        .m_doc = module__doc__, /* module documentation, may be NULL */
+        .m_size = 0, /* size of per-interpreter state of the module */
+        .m_methods = methods,
 };
 
 DISABLE_WARNING_MISSING_PROTOTYPES;
@@ -450,7 +520,7 @@ PyMODINIT_FUNC PyInit__daemon(void) {
         PyObject *m;
 
         m = PyModule_Create(&module);
-        if (m == NULL)
+        if (!m)
                 return NULL;
 
         if (PyModule_AddIntConstant(m, "LISTEN_FDS_START", SD_LISTEN_FDS_START) ||
