@@ -30,9 +30,10 @@
 #include "id128-defines.h"
 #include <systemd/sd-messages.h>
 
-
 #include "pyutil.h"
 #include "macro.h"
+
+#define HAVE_SD_ID128_GET_MACHINE_APP_SPECIFIC (LIBSYSTEMD_VERSION >= 240)
 
 PyDoc_STRVAR(module__doc__,
              "Python interface to the libsystemd-id128 library.\n\n"
@@ -50,6 +51,12 @@ PyDoc_STRVAR(get_machine__doc__,
              "get_machine() -> UUID\n\n"
              "Return a 128-bit unique identifier for this machine.\n"
              "Wraps sd_id128_get_machine(3)."
+);
+
+PyDoc_STRVAR(get_machine_app_specific__doc__,
+             "get_machine_app_specific(UUID) -> UUID\n\n"
+             "Return a 128-bit unique identifier for this application and machine.\n"
+             "Wraps sd_id128_get_machine_app_specific(3)."
 );
 
 PyDoc_STRVAR(get_boot__doc__,
@@ -85,7 +92,7 @@ static PyObject* make_uuid(sd_id128_t id) {
                 sd_id128_t id;                                          \
                 int r;                                                  \
                                                                         \
-                assert(args == NULL);                                   \
+                assert(!args);                                          \
                                                                         \
                 r = sd_id128_##name(&id);                               \
                 if (r < 0) {                                            \
@@ -100,11 +107,48 @@ helper(randomize)
 helper(get_machine)
 helper(get_boot)
 
+static PyObject *get_machine_app_specific(PyObject *self, PyObject *args) {
+        _cleanup_Py_DECREF_ PyObject *uuid_bytes = NULL;
+
+        uuid_bytes = PyObject_GetAttrString(args, "bytes");
+        if (!uuid_bytes)
+                return NULL;
+
+#if HAVE_SD_ID128_GET_MACHINE_APP_SPECIFIC
+        Py_buffer buffer;
+        sd_id128_t app_id;
+        int r;
+
+        r = PyObject_GetBuffer(uuid_bytes, &buffer, 0);
+        if (r == -1)
+                return NULL;
+
+        if (buffer.len != sizeof(sd_id128_t)) {
+                PyBuffer_Release(&buffer);
+                return NULL;
+        }
+
+        r = sd_id128_get_machine_app_specific(*(sd_id128_t*)buffer.buf, &app_id);
+        PyBuffer_Release(&buffer);
+        if (r < 0) {
+                errno = -r;
+                return PyErr_SetFromErrno(PyExc_IOError);
+        }
+
+        return make_uuid(app_id);
+
+#else
+        set_error(-ENOSYS, NULL, "Compiled without support for sd_id128_get_machine_app_specific");
+        return NULL;
+#endif
+}
+
 static PyMethodDef methods[] = {
         { "randomize", randomize, METH_NOARGS, randomize__doc__},
         { "get_machine", get_machine, METH_NOARGS, get_machine__doc__},
+        { "get_machine_app_specific", get_machine_app_specific, METH_O, get_machine_app_specific__doc__},
         { "get_boot", get_boot, METH_NOARGS, get_boot__doc__},
-        { NULL, NULL, 0, NULL }        /* Sentinel */
+        {}        /* Sentinel */
 };
 
 static int add_id(PyObject *module, const char* name, sd_id128_t id) {
@@ -124,7 +168,7 @@ PyMODINIT_FUNC initid128(void) {
         PyObject *m;
 
         m = Py_InitModule3("id128", methods, module__doc__);
-        if (m == NULL)
+        if (!m)
                 return;
 
         /* a series of lines like 'add_id() ;' follow */
@@ -139,10 +183,10 @@ REENABLE_WARNING;
 
 static struct PyModuleDef module = {
         PyModuleDef_HEAD_INIT,
-        "id128", /* name of module */
-        module__doc__, /* module documentation, may be NULL */
-        -1, /* size of per-interpreter state of the module */
-        methods
+        .m_name = "id128", /* name of module */
+        .m_doc = module__doc__, /* module documentation */
+        .m_size = -1, /* size of per-interpreter state of the module */
+        .m_methods = methods,
 };
 
 DISABLE_WARNING_MISSING_PROTOTYPES;
@@ -150,7 +194,7 @@ PyMODINIT_FUNC PyInit_id128(void) {
         PyObject *m;
 
         m = PyModule_Create(&module);
-        if (m == NULL)
+        if (!m)
                 return NULL;
 
         if ( /* a series of lines like 'add_id() ||' follow */

@@ -38,7 +38,7 @@ static PyObject* name(PyObject *self, PyObject *args) {                 \
         int r;                                                          \
         PyObject *ans;                                                  \
                                                                         \
-        assert(args == NULL);                                           \
+        assert(!args);                                                  \
                                                                         \
         r = sd_get_##name(&list);                                       \
         if (r < 0) {                                                    \
@@ -73,7 +73,7 @@ static PyObject* uids(PyObject *self, PyObject *args) {
         int r;
         PyObject *ans;
 
-        assert(args == NULL);
+        assert(!args);
 
         r = sd_get_uids(&list);
         if (r < 0) {
@@ -148,7 +148,7 @@ PyDoc_STRVAR(Monitor__doc__,
              "Monitor may be used to monitor login sessions, users, seats, and virtual\n"
              "machines/containers. Monitor provides a file descriptor which can be\n"
              "integrated in an external event loop.\n\n"
-             "See man:sd_login_monitor_new(3) for the details about what can be monitored.");
+             "See :manpage:`sd_login_monitor_new(3)` for the details about what can be monitored.");
 static int Monitor_init(Monitor *self, PyObject *args, PyObject *keywds) {
         const char *category = NULL;
         int r;
@@ -183,7 +183,7 @@ PyDoc_STRVAR(Monitor_get_events__doc__,
              "get_events() -> int\n\n"
              "Returns a mask of poll() events to wait for on the file descriptor returned\n"
              "by .fileno().\n\n"
-             "See man:sd_login_monitor_get_events(3) for further discussion.");
+             "See :manpage:`sd_login_monitor_get_events(3)` for further discussion.");
 static PyObject* Monitor_get_events(Monitor *self, PyObject *args) {
         int r = sd_login_monitor_get_events(self->monitor);
         set_error(r, NULL, NULL);
@@ -200,7 +200,7 @@ PyDoc_STRVAR(Monitor_get_timeout__doc__,
              "is necessary.\n\n"
              "The return value must be converted to a relative timeout in\n"
              "milliseconds if it is to be used as an argument for poll().\n"
-             "See man:sd_login_monitor_get_timeout(3) for further discussion.");
+             "See :manpage:`sd_login_monitor_get_timeout(3)` for further discussion.");
 static PyObject* Monitor_get_timeout(Monitor *self, PyObject *args) {
         int r;
         uint64_t t;
@@ -240,7 +240,7 @@ PyDoc_STRVAR(Monitor_close__doc__,
              "close() -> None\n\n"
              "Free resources allocated by this Monitor object.\n"
              "This method invokes sd_login_monitor_unref().\n"
-             "See man:sd_login_monitor_unref(3).");
+             "See :manpage:`sd_login_monitor_unref(3)`.");
 static PyObject* Monitor_close(Monitor *self, PyObject *args) {
         assert(self);
         assert(!args);
@@ -255,7 +255,7 @@ PyDoc_STRVAR(Monitor_flush__doc__,
              "flush() -> None\n\n"
              "Reset the wakeup state of the monitor object.\n"
              "This method invokes sd_login_monitor_flush().\n"
-             "See man:sd_login_monitor_flush(3).");
+             "See :manpage:`sd_login_monitor_flush(3)`.");
 static PyObject* Monitor_flush(Monitor *self, PyObject *args) {
         assert(self);
         assert(!args);
@@ -323,7 +323,7 @@ PyMODINIT_FUNC initlogin(void) {
                 return;
 
         m = Py_InitModule3("login", methods, module__doc__);
-        if (m == NULL)
+        if (!m)
                 return;
 
         PyModule_AddStringConstant(m, "__version__", PACKAGE_VERSION);
@@ -351,7 +351,7 @@ PyMODINIT_FUNC PyInit_login(void) {
                 return NULL;
 
         m = PyModule_Create(&module);
-        if (m == NULL)
+        if (!m)
                 return NULL;
 
         if (PyModule_AddStringConstant(m, "__version__", PACKAGE_VERSION)) {

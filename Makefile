@@ -1,6 +1,5 @@
 PYTHON = python
 SED = sed
-SPHINX_BUILD = sphinx-build
 ETAGS = etags
 INCLUDE_DIR := $(shell pkg-config --variable=includedir libsystemd)
 INCLUDE_FLAGS := $(shell pkg-config --cflags libsystemd)
@@ -8,8 +7,10 @@ VERSION := $(shell $(PYTHON) setup.py --version)
 TESTFLAGS = -v
 
 define buildscript
-import sys,sysconfig
-print("build/lib.{}-{}.{}".format(sysconfig.get_platform(), *sys.version_info[:2]))
+import sys, sysconfig, setuptools
+sversion = int(setuptools.__version__.split(".")[0])
+end = sys.implementation.cache_tag if sversion >= 61 else "{}.{}".format(*sys.version_info[:2])
+print("build/lib.{}-{}".format(sysconfig.get_platform(), end))
 endef
 
 builddir := $(shell $(PYTHON) -c '$(buildscript)')
@@ -49,9 +50,10 @@ clean:
 distclean: clean
 	rm -rf dist MANIFEST
 
-SPHINXOPTS = -D version=$(VERSION) -D release=$(VERSION)
+SPHINXOPTS += -D version=$(VERSION) -D release=$(VERSION)
 sphinx-%: build
-	PYTHONPATH=$(builddir) $(SPHINX_BUILD) -b $* $(SPHINXOPTS) docs build/$*
+	cd build && \
+	  PYTHONPATH=../$(builddir) $(PYTHON) -m sphinx -b $* $(SPHINXOPTS) ../docs $*
 	@echo Output has been generated in build/$*
 
 doc: sphinx-html

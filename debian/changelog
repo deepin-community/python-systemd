@@ -1,3 +1,13 @@
+python-systemd (235-1) unstable; urgency=medium
+
+  * New upstream version 235
+  * Drop patches, merged upstream
+  * Bump Standards-Version to 3.6.1, no further changes
+  * Add Build-Depends on python3-setuptools
+  * Enable all hardening build flags
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 16 Aug 2022 17:12:47 +0200
+
 python-systemd (234-4) unstable; urgency=medium
 
   [ Debian Janitor ]
